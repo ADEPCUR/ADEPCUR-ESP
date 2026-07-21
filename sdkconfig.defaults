@@ -1,0 +1,13 @@
+# Default configuration for the rover ESP32 project
+CONFIG_ESP_WIFI_AUTH_WPA2_PSK=y
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=512
+CONFIG_HTTPD_MAX_URI_LEN=512
+
+# Prevent console logging from polluting UART0 which is used for binary protocol
+CONFIG_ESP_CONSOLE_NONE=y
+CONFIG_ESP_CONSOLE_UART_NUM=-1
+CONFIG_LOG_DEFAULT_LEVEL_NONE=y
+CONFIG_LOG_DEFAULT_LEVEL=0
+
+# Habilitar soporte para WebSockets en ESP_HTTP_SERVER
+CONFIG_HTTPD_WS_SUPPORT=y

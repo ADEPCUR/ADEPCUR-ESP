@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
+    <title>Rover Control V2</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="video-bg">
+        <img id="stream" src="http://192.168.4.1:81/stream" alt="Video Stream" />
+        
+        <!-- Telemetry Overlay (HUD) -->
+        <div id="hud">
+            <div class="hud-top">
+                <div class="hud-item">
+                    <span class="hud-label">LINK</span>
+                    <span id="ws-status" class="hud-val offline">OFF</span>
+                </div>
+                <div class="hud-item">
+                    <span class="hud-label">SYS</span>
+                    <span id="sys-status" class="hud-val">WAIT</span>
+                </div>
+                <div class="hud-item">
+                    <span class="hud-label">MODE</span>
+                    <span id="arm-status" class="hud-val offline">DISARMED</span>
+                </div>
+            </div>
+            
+            <div id="failsafe-warn" class="warn-banner hidden">FAILSAFE ACTIVE</div>
+            
+            <div class="hud-bottom">
+                <div class="hud-item">
+                    <span class="hud-label">MOT-L</span>
+                    <span id="mot-l" class="hud-val">0%</span>
+                </div>
+                <div class="hud-item">
+                    <span class="hud-label">MOT-R</span>
+                    <span id="mot-r" class="hud-val">0%</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Controls -->
+    <div id="controls-layer">
+        <button id="arm-btn" class="arm-btn">ARM MOTORS</button>
+        
+        <div id="joystick-zone">
+            <div id="joystick-base">
+                <div id="joystick-stick"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
