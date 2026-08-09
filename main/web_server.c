@@ -1,16 +1,16 @@
 #include "web_server.h"
 #include <esp_http_server.h>
 #include <string.h>
+#include <stdbool.h>
+#include <stdio.h>
 #include "esp_camera.h"
-#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "rover_cmd.h"
 
 // Cola global definida en main.c
 extern QueueHandle_t cmd_queue;
-
-typedef enum { CMD_STOP = 0, CMD_FWD, CMD_REV, CMD_LEFT, CMD_RIGHT, CMD_ARM } rover_cmd_t;
 
 // HTML ultra moderno (estilo premium) y optimizado para móvil
 static const char* HTML_CONTENT = 
@@ -46,11 +46,17 @@ static const char* HTML_CONTENT =
 "  b.addEventListener('mousedown', start); b.addEventListener('mouseup', end);"
 "  b.addEventListener('touchstart', start); b.addEventListener('touchend', end);"
 "}"
+"let armed = false;"
 "window.onload = function() {"
 "  connect();"
 "  setupBtn('up', 'fwd'); setupBtn('dn', 'rev');"
 "  setupBtn('lt', 'left'); setupBtn('rt', 'right');"
-"  document.getElementById('arm').onclick = function() { snd('arm'); };"
+"  let armBtn = document.getElementById('arm');"
+"  armBtn.onclick = function() {"
+"    armed = !armed;"
+"    snd(armed ? 'arm' : 'disarm');"
+"    armBtn.textContent = armed ? 'DISARM MOTORS' : 'ARM MOTORS';"
+"  };"
 "};"
 "</script></head><body>"
 "<div class='container'>"
@@ -109,6 +115,14 @@ static esp_err_t stream_handler(httpd_req_t *req) {
     return res;
 }
 
+/* Exact match, not a prefix match: strncmp(payload, "arm", n) would also
+ * accept "arm-anything" for n > 3, and reads n bytes of the literal even
+ * when n exceeds its length. */
+static bool ws_cmd_is(const httpd_ws_frame_t *pkt, const char *text) {
+    size_t n = strlen(text);
+    return pkt->len == n && memcmp(pkt->payload, text, n) == 0;
+}
+
 static esp_err_t ws_handler(httpd_req_t *req) {
     if (req->method == HTTP_GET) {
         // Handshake inicial
@@ -127,14 +141,31 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     }
     
     if (ws_pkt.type == HTTPD_WS_TYPE_TEXT && ws_pkt.len > 0) {
-        rover_cmd_t c = CMD_STOP;
-        if (strncmp((char*)ws_pkt.payload, "fwd", ws_pkt.len) == 0) c = CMD_FWD;
-        else if (strncmp((char*)ws_pkt.payload, "rev", ws_pkt.len) == 0) c = CMD_REV;
-        else if (strncmp((char*)ws_pkt.payload, "left", ws_pkt.len) == 0) c = CMD_LEFT;
-        else if (strncmp((char*)ws_pkt.payload, "right", ws_pkt.len) == 0) c = CMD_RIGHT;
-        else if (strncmp((char*)ws_pkt.payload, "arm", ws_pkt.len) == 0) c = CMD_ARM;
-        
-        xQueueSend(cmd_queue, &c, 0);
+        // "T <left> <right>", milli-units -1000..1000 -- analog joystick.
+        // httpd_ws_recv_frame() only ever wrote ws_pkt.len bytes into buf
+        // (zero-initialized, 128 bytes, len capped at 127), so the rest is
+        // still 0: safe to treat as a NUL-terminated C string here.
+        int left_mv, right_mv;
+        if (ws_pkt.len >= 3 && ws_pkt.payload[0] == 'T' && ws_pkt.payload[1] == ' ' &&
+            sscanf((char *)ws_pkt.payload + 2, "%d %d", &left_mv, &right_mv) == 2) {
+            if (left_mv > 1000) left_mv = 1000;
+            if (left_mv < -1000) left_mv = -1000;
+            if (right_mv > 1000) right_mv = 1000;
+            if (right_mv < -1000) right_mv = -1000;
+            rover_cmd_msg_t msg = { .cmd = CMD_THROTTLE, .left = (int16_t)left_mv, .right = (int16_t)right_mv };
+            xQueueSend(cmd_queue, &msg, 0);
+            return ESP_OK;
+        }
+
+        rover_cmd_msg_t msg = { .cmd = CMD_STOP, .left = 0, .right = 0 };
+        if (ws_cmd_is(&ws_pkt, "fwd")) msg.cmd = CMD_FWD;
+        else if (ws_cmd_is(&ws_pkt, "rev")) msg.cmd = CMD_REV;
+        else if (ws_cmd_is(&ws_pkt, "left")) msg.cmd = CMD_LEFT;
+        else if (ws_cmd_is(&ws_pkt, "right")) msg.cmd = CMD_RIGHT;
+        else if (ws_cmd_is(&ws_pkt, "arm")) msg.cmd = CMD_ARM;
+        else if (ws_cmd_is(&ws_pkt, "disarm")) msg.cmd = CMD_DISARM;
+
+        xQueueSend(cmd_queue, &msg, 0);
     }
     return ESP_OK;
 }

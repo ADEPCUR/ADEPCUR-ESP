@@ -9,10 +9,8 @@
 #include "nvs_flash.h"
 #include "uart_link.h"
 #include "rover_protocol.h"
+#include "rover_cmd.h"
 #include "web_server.h"
-
-// Definición de comandos de la UI
-typedef enum { CMD_STOP = 0, CMD_FWD, CMD_REV, CMD_LEFT, CMD_RIGHT, CMD_ARM } rover_cmd_t;
 
 QueueHandle_t cmd_queue;
 
@@ -100,47 +98,52 @@ static void wifi_init_softap(void) {
 }
 
 static void rover_control_task(void *arg) {
-    rover_cmd_t current_cmd = CMD_STOP;
+    // Estado de throttle actual del rover -- reemplaza al viejo "current_cmd"
+    // enum-based, porque CMD_THROTTLE (joystick analógico) necesita valores
+    // arbitrarios, no solo los 5 combos fijos que representaba el D-pad.
+    int16_t cur_left = 0;
+    int16_t cur_right = 0;
     uint8_t frame_buf[32];
     int frame_len;
     uint32_t last_web_cmd_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
-    
+
     while(1) {
-        rover_cmd_t new_cmd;
+        rover_cmd_msg_t msg;
         // Esperamos un comando nuevo hasta 100ms
-        if (xQueueReceive(cmd_queue, &new_cmd, pdMS_TO_TICKS(100))) {
+        if (xQueueReceive(cmd_queue, &msg, pdMS_TO_TICKS(100))) {
             last_web_cmd_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
-            if (new_cmd == CMD_ARM) {
-                frame_len = simpleprotocol_encode_tc_arm(frame_buf, true);
-                uart_link_send(frame_buf, frame_len);
-                current_cmd = CMD_STOP;
-            } else {
-                current_cmd = new_cmd;
+            switch (msg.cmd) {
+                case CMD_ARM:
+                case CMD_DISARM:
+                    frame_len = simpleprotocol_encode_tc_arm(frame_buf, msg.cmd == CMD_ARM);
+                    uart_link_send(frame_buf, frame_len);
+                    cur_left = 0;
+                    cur_right = 0;
+                    break;
+                case CMD_THROTTLE:
+                    cur_left = msg.left;
+                    cur_right = msg.right;
+                    break;
+                case CMD_FWD: cur_left = 1000; cur_right = 1000; break;
+                case CMD_REV: cur_left = -1000; cur_right = -1000; break;
+                // Debido a cómo están conectados los cables en el chasis (motores invertidos),
+                // intercambiamos el giro para la izquierda y la derecha:
+                case CMD_LEFT: cur_left = 1000; cur_right = -1000; break;
+                case CMD_RIGHT: cur_left = -1000; cur_right = 1000; break;
+                case CMD_STOP:
+                default: cur_left = 0; cur_right = 0; break;
             }
         } else {
             // Failsafe de WiFi: Si pasaron > 500ms sin recibir NINGUN comando de la web, cortamos motores.
             uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
             if ((now - last_web_cmd_ms) > 500) {
-                current_cmd = CMD_STOP;
+                cur_left = 0;
+                cur_right = 0;
             }
         }
-        
-        // Mapear comandos de dirección a valores L/R del rover
-        int16_t left = 0;
-        int16_t right = 0;
-        switch(current_cmd) {
-            case CMD_FWD: left = 1000; right = 1000; break;
-            case CMD_REV: left = -1000; right = -1000; break;
-            // Debido a cómo están conectados los cables en el chasis (motores invertidos),
-            // intercambiamos el giro para la izquierda y la derecha:
-            case CMD_LEFT: left = 1000; right = -1000; break;
-            case CMD_RIGHT: left = -1000; right = 1000; break;
-            case CMD_STOP:
-            default: left = 0; right = 0; break;
-        }
-        
+
         // Enviar trama de throttle a la placa Blackpill
-        frame_len = simpleprotocol_encode_tc_throttle(frame_buf, left, right);
+        frame_len = simpleprotocol_encode_tc_throttle(frame_buf, cur_left, cur_right);
         uart_link_send(frame_buf, frame_len);
     }
 }
@@ -155,7 +158,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(ret);
 
     // Crear cola para pasar comandos del hilo Web al hilo de Control (10 elementos)
-    cmd_queue = xQueueCreate(10, sizeof(rover_cmd_t));
+    cmd_queue = xQueueCreate(10, sizeof(rover_cmd_msg_t));
 
     // Inicializar periféricos
     uart_link_init();
